@@ -33,7 +33,9 @@ import { toast } from "sonner";
 import { z } from "zod";
 
 const schema = z.object({
-	serverIp: z.string(),
+	serverIp: z.string().trim().min(1, {
+		message: "Server IP is required",
+	}),
 });
 
 type Schema = z.infer<typeof schema>;

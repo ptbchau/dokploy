@@ -132,7 +132,13 @@ export const apiCreateServer = createSchema
 		username: true,
 		sshKeyId: true,
 	})
-	.required();
+	.required()
+	.extend({
+		ipAddress: z.string().trim().min(1, {
+			message: "IP Address is required",
+		}),
+		username: z.string().trim().optional(),
+	});
 
 export const apiFindOneServer = createSchema
 	.pick({
@@ -159,6 +165,10 @@ export const apiUpdateServer = createSchema
 	.required()
 	.extend({
 		command: z.string().optional(),
+		ipAddress: z.string().trim().min(1, {
+			message: "IP Address is required",
+		}),
+		username: z.string().trim().optional(),
 	});
 
 export const apiUpdateServerMonitoring = createSchema

@@ -7,6 +7,7 @@ import { updateDeploymentStatus } from "@dokploy/server/services/deployment";
 import { findScheduleById } from "@dokploy/server/services/schedule";
 import { scheduleJob as scheduleJobNode, scheduledJobs } from "node-schedule";
 import { getComposeContainer, getServiceContainer } from "../docker/utils";
+import { resolveWorkingDirectory } from "../docker/exec";
 import { execAsyncRemote } from "../process/execAsync";
 import { spawnAsync } from "../process/spawnAsync";
 
@@ -60,12 +61,16 @@ export const runCommand = async (scheduleId: string) => {
 
 		if (serverId) {
 			try {
+				const workdir = await resolveWorkingDirectory({
+					containerId,
+					serverId,
+				});
 				await execAsyncRemote(
 					serverId,
 					`
 					set -e
-					echo "Running command: docker exec ${containerId} ${shellType} -c '${command}'" >> ${deployment.logPath};
-					docker exec ${containerId} ${shellType} -c '${command}' >> ${deployment.logPath} 2>> ${deployment.logPath} || { 
+					echo "Running command: docker exec -w \"${workdir}\" ${containerId} ${shellType} -c '${command}'" >> ${deployment.logPath};
+					docker exec -w "${workdir}" ${containerId} ${shellType} -c '${command}' >> ${deployment.logPath} 2>> ${deployment.logPath} || { 
 						echo "❌ Command failed" >> ${deployment.logPath};
 						exit 1;
 					}
@@ -80,12 +85,15 @@ export const runCommand = async (scheduleId: string) => {
 			const writeStream = createWriteStream(deployment.logPath, { flags: "a" });
 
 			try {
+				const workdir = await resolveWorkingDirectory({
+					containerId,
+				});
 				writeStream.write(
-					`docker exec ${containerId} ${shellType} -c ${command}\n`,
+					`docker exec -w "${workdir}" ${containerId} ${shellType} -c ${command}\n`,
 				);
 				await spawnAsync(
 					"docker",
-					["exec", containerId, shellType, "-c", command],
+					["exec", "-w", workdir, containerId, shellType, "-c", command],
 					(data) => {
 						if (writeStream.writable) {
 							writeStream.write(data);

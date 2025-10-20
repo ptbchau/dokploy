@@ -1,5 +1,5 @@
 import type http from "node:http";
-import { findServerById, validateRequest } from "@dokploy/server";
+import { findServerById, resolveWorkingDirectory, validateRequest } from "@dokploy/server";
 import { spawn } from "node-pty";
 import { Client } from "ssh2";
 import { WebSocketServer } from "ws";
@@ -45,6 +45,10 @@ export const setupDockerContainerTerminalWebSocketServer = (
 		}
 		try {
 			if (serverId) {
+				const workdir = await resolveWorkingDirectory({
+					containerId,
+					serverId,
+				});
 				const server = await findServerById(serverId);
 				if (!server.sshKeyId)
 					throw new Error("No SSH key available for this server");
@@ -55,7 +59,7 @@ export const setupDockerContainerTerminalWebSocketServer = (
 				conn
 					.once("ready", () => {
 						conn.exec(
-							`docker exec -it ${containerId} ${activeWay}`,
+							`docker exec -it -w "${workdir}" ${containerId} ${activeWay}`,
 							{ pty: true },
 							(err, stream) => {
 								if (err) throw err;
@@ -104,10 +108,13 @@ export const setupDockerContainerTerminalWebSocketServer = (
 						privateKey: server.sshKey?.privateKey,
 					});
 			} else {
+				const workdir = await resolveWorkingDirectory({
+					containerId,
+				});
 				const shell = getShell();
 				const ptyProcess = spawn(
 					shell,
-					["-c", `docker exec -it ${containerId} ${activeWay}`],
+					["-c", `docker exec -it -w "${workdir}" ${containerId} ${activeWay}`],
 					{},
 				);
 

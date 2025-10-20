@@ -84,6 +84,7 @@ export * from "./utils/docker/compose/network";
 export * from "./utils/docker/compose/secrets";
 export * from "./utils/docker/compose/service";
 export * from "./utils/docker/compose/volume";
+export * from "./utils/docker/exec";
 
 export * from "./utils/filesystem/directory";
 export * from "./utils/filesystem/ssh";

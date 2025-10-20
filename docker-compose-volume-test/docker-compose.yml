@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  web:
+    image: node:18-alpine
+    working_dir: /app
+    volumes:
+      - app-data:/app/data
+      - ./src:/app/src
+    command: tail -f /dev/null
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+
+  database:
+    image: postgres:15-alpine
+    working_dir: /var/lib/postgresql/data
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=testdb
+      - POSTGRES_USER=testuser
+      - POSTGRES_PASSWORD=testpass
+    ports:
+      - "5433:5432"
+
+volumes:
+  app-data:
+    driver: local
+  db-data:
+    driver: local

@@ -292,7 +292,17 @@ const onSubmit = async (values: Profile) => {
 		currentPassword: values.currentPassword || undefined,
 		allowImpersonation: values.allowImpersonation,
 	})
-	// ... rest of the function
+		.then(async () => {
+			await refetch();
+			toast.success("Profile Updated");
+			form.reset({
+				name: values.name, // Add this line
+				email: values.email,
+				password: "",
+				image: values.image,
+				currentPassword: "",
+			});
+		})
 };
 ```
 
@@ -325,7 +335,18 @@ Add the actual name input field to the form:
 
 **Why:** This creates the visual input field for users to enter their name.
 
-### Step 5: Update the Side Panel Display
+### Step 5: Add Translation Keys for Name Field
+**Files:** All language files in `apps/dokploy/public/locales/*/settings.json`
+
+Add the missing translation key for the name field label:
+
+```json
+"settings.profile.name": "Name",  // Add this line after settings.profile.email
+```
+
+**Why:** The name field uses `t("settings.profile.name")` for the label, but this translation key was missing from all language files. This ensures consistent, properly translated labels across all supported languages and prevents the raw translation key from being displayed to users.
+
+### Step 6: Update the Side Panel Display
 **File:** `apps/dokploy/components/layouts/user-nav.tsx`
 **Line:** 52
 
@@ -339,20 +360,81 @@ Replace "Account" with the user's name in the side panel:
 
 **Why:** This shows the user's name instead of "Account" in the bottom left of the side panel.
 
-### Step 6: Verify Backend Support
+### Step 7: Verify Backend Support
 **Files to check:**
 - `packages/server/src/db/schema/schema.dbml` (line 719)
 - `packages/server/src/db/schema/user.ts`
 - `apps/dokploy/server/api/routers/user.ts`
 
 **Verification needed:**
-- ✅ Database schema already has `name` field (line 719 in schema.dbml: `name text [not null, default: '']`)
-- ✅ Backend API already supports name updates (the `updateUser` function accepts any user field)
-- ✅ The `apiUpdateUser` schema should already include name field
+
+**1. Database Schema Verification:**
+```typescript
+// File: packages/server/src/db/schema/user.ts (line 33)
+export const users_temp = pgTable("user_temp", {
+	id: text("id").notNull().primaryKey().$defaultFn(() => nanoid()),
+	name: text("name").notNull().default(""), // ← Name field exists
+	email: text("email").notNull().unique(),
+	// ... other fields
+});
+```
+✅ **Verified:** The `name` field exists in the database schema with type `text` and default value `""`.
+
+**2. Backend API Service Function Verification:**
+```typescript
+// File: packages/server/src/services/user.ts (lines 240-251)
+export const updateUser = async (userId: string, userData: Partial<User>) => {
+	const user = await db
+		.update(users_temp)
+		.set({
+			...userData, // ← This spread operator accepts ANY user field
+		})
+		.where(eq(users_temp.id, userId))
+		.returning()
+		.then((res) => res[0]);
+	return user;
+};
+```
+✅ **Verified:** The `...userData` spread operator means this function accepts **any field** from the User type, including `name`.
+
+**3. API Schema Verification:**
+```typescript
+// File: packages/server/src/db/schema/user.ts (lines 136-141, 298)
+const createSchema = createInsertSchema(users_temp, {
+	id: z.string().min(1),
+	isRegistered: z.boolean().optional(),
+}).omit({
+	role: true,
+});
+
+export const apiUpdateUser = createSchema.partial().extend({
+	password: z.string().optional(),
+	currentPassword: z.string().optional(),
+	// ... other specific fields
+});
+```
+✅ **Verified:** 
+- `createSchema` is created from `users_temp` table, which includes the `name` field
+- `apiUpdateUser` extends `createSchema.partial()`, meaning it includes ALL fields from the table as optional
+- The `name` field is automatically included because it's part of the base schema
+
+**4. API Router Verification:**
+```typescript
+// File: apps/dokploy/server/api/routers/user.ts (lines 145-178)
+update: protectedProcedure
+	.input(apiUpdateUser) // ← Uses the schema that includes name
+	.mutation(async ({ input, ctx }) => {
+		// ... password validation logic
+		return await updateUser(ctx.user.id, input); // ← Passes all input to updateUser
+	}),
+```
+✅ **Verified:** The API router uses `apiUpdateUser` schema and passes all input to `updateUser` function.
+
+**Summary:** The backend is **already fully prepared** to handle name updates. The database schema includes the `name` field, the service function accepts any user field via `...userData`, the API schema includes all table fields as optional, and the API router passes all input to the service function. The only missing piece is the frontend form - it doesn't send the `name` field in the request.
 
 **Why:** The database schema and API should already support name updates, but we need to verify this.
 
-### Step 7: Test the Implementation
+### Step 8: Test the Implementation
 **Manual Testing Steps:**
 
 1. **Navigate to profile settings**

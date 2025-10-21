@@ -37,6 +37,7 @@
 	"settings.profile.title": "Konto",
 	"settings.profile.description": "Endre detaljene for profilen din her.",
 	"settings.profile.email": "Epost",
+	"settings.profile.name": "Navn",
 	"settings.profile.password": "Passord",
 	"settings.profile.avatar": "Avatar",
 

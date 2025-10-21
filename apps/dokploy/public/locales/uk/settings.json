@@ -38,6 +38,7 @@
 	"settings.profile.title": "Обліковий запис",
 	"settings.profile.description": "Змініть дані вашого профілю.",
 	"settings.profile.email": "Електронна пошта",
+	"settings.profile.name": "Ім'я",
 	"settings.profile.password": "Пароль",
 	"settings.profile.avatar": "Аватар",
 

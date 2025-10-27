@@ -31,10 +31,10 @@ import { z } from "zod";
 import { Disable2FA } from "./disable-2fa";
 import { Enable2FA } from "./enable-2fa";
 
-const profileSchema = z.object({
-	email: z.string(),
-	password: z.string().nullable(),
-	currentPassword: z.string().nullable(),
+export const profileSchema = z.object({
+	email: z.string().min(1).email(),
+	password: z.string().nullish(),
+	currentPassword: z.string().nullish(),
 	image: z.string().optional(),
 	allowImpersonation: z.boolean().optional().default(false),
 });

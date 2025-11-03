@@ -31,6 +31,13 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue
+} from "@/components/ui/select";
 import { api } from "@/utils/api";
 import {
 	AlertTriangle,
@@ -43,7 +50,7 @@ import {
 	TrashIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { HandleProject } from "./handle-project";
 import { ProjectEnvironment } from "./project-environment";
@@ -54,15 +61,59 @@ export const ShowProjects = () => {
 	const { data: auth } = api.user.get.useQuery();
 	const { mutateAsync } = api.project.remove.useMutation();
 	const [searchQuery, setSearchQuery] = useState("");
+	const [sortBy, setSortBy] = useState<string>(() => {
+		if (typeof window !== "undefined") {
+			return localStorage.getItem("projectsSort") || "createdAt-desc";
+		}
+		return "createdAt-desc";
+	});
+
+	useEffect(() => {
+		localStorage.setItem("projectsSort", sortBy);
+	}, [sortBy]);
+
+	const sortProjects = (projects: typeof data) => {
+		if (!projects) return [];
+		const [field, direction] = sortBy.split("-");
+		return [...projects].sort((a, b) => {
+			let comparison = 0;
+			switch (field) {
+				case "name":
+					comparison = a.name.localeCompare(b.name);
+					break;
+				case "createdAt":
+					comparison = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+					break;
+				case "services":
+					const getTotalServices = (project: NonNullable<typeof data>[number]) => {
+						return (
+							project.mariadb.length +
+							project.mongo.length +
+							project.mysql.length +
+							project.postgres.length +
+							project.redis.length +
+							project.applications.length +
+							project.compose.length
+						);
+					}
+					comparison = getTotalServices(a) - getTotalServices(b);
+					break;
+				default:
+					comparison = 0;
+			}
+			return direction === "asc" ? comparison : -comparison;
+		});
+	}
 
 	const filteredProjects = useMemo(() => {
 		if (!data) return [];
-		return data.filter(
+		const filtered = data.filter(
 			(project) =>
 				project.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
 				project.description?.toLowerCase().includes(searchQuery.toLowerCase()),
 		);
-	}, [data, searchQuery]);
+		return sortProjects(filtered);
+	}, [data, searchQuery, sortBy]);
 
 	return (
 		<>
@@ -98,14 +149,41 @@ export const ShowProjects = () => {
 								</div>
 							) : (
 								<>
-									<div className="w-full relative">
-										<Input
-											placeholder="Filter projects..."
-											value={searchQuery}
-											onChange={(e) => setSearchQuery(e.target.value)}
-											className="pr-10"
-										/>
-										<Search className="absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+									<div className="flex flex-row gap-2 lg:flex-row lg:gap-4 lg:items-center">
+										<div className="w-full relative">
+											<Input
+												placeholder="Filter projects..."
+												value={searchQuery}
+												onChange={(e) => setSearchQuery(e.target.value)}
+												className="pr-10"
+											/>
+											<Search className="absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+										</div>
+										<Select value={sortBy} onValueChange={setSortBy}>
+											<SelectTrigger className="lg:w-[280px]">
+												<SelectValue placeholder="Sort by..." />
+											</SelectTrigger>
+											<SelectContent>
+												<SelectItem value="createdAt-desc">
+													Newest first
+												</SelectItem>
+												<SelectItem value="createdAt-asc">
+													Oldest first
+												</SelectItem>
+												<SelectItem value="name-asc">
+													Name (A-Z)
+												</SelectItem>
+												<SelectItem value="name-desc">
+													Name (Z-A)
+												</SelectItem>
+												<SelectItem value="services-asc">
+													Services (Least to Most)
+												</SelectItem>
+												<SelectItem value="services-desc">
+													Services (Most to Least)
+												</SelectItem>
+											</SelectContent>
+										</Select>
 									</div>
 									{filteredProjects?.length === 0 && (
 										<div className="mt-6 flex h-[50vh] w-full flex-col items-center justify-center space-y-4">

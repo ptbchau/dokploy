@@ -22,14 +22,19 @@ import { Switch } from "@/components/ui/switch";
 import { generateSHA256Hash } from "@/lib/utils";
 import { api } from "@/utils/api";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Loader2, User } from "lucide-react";
+import { Loader2, User, Upload } from "lucide-react";
 import { useTranslation } from "next-i18next";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
 import { Disable2FA } from "./disable-2fa";
 import { Enable2FA } from "./enable-2fa";
+import {
+	MAX_AVATAR_SIZE,
+	ALLOWED_AVATAR_MIME_TYPES,
+	ALLOWED_AVATAR_EXTENSIONS,
+} from "@dokploy/server/constants/client";
 
 const profileSchema = z.object({
 	email: z.string(),
@@ -67,15 +72,34 @@ export const ProfileForm = () => {
 		isError,
 		error,
 	} = api.user.update.useMutation();
+	const {
+		mutateAsync: uploadAvatar,
+		isLoading: isUploading,
+	} = api.user.uploadAvatar.useMutation();
+
 	const { t } = useTranslation("settings");
 	const [gravatarHash, setGravatarHash] = useState<string | null>(null);
+	const [uploadedAvatarUrl, setUploadedAvatarUrl] = useState<string | null>(null);
+	const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+	const fileInputRef = useRef<HTMLInputElement>(null);
+
+	const getAvatarFileExtension = (fileName: string) : string => {
+		const lastDot = fileName.lastIndexOf(".");
+		if (lastDot === -1 || lastDot === fileName.length - 1) {
+			return "";
+		}
+		return fileName.substring(lastDot).toLowerCase().trim();
+	}
 
 	const availableAvatars = useMemo(() => {
-		if (gravatarHash === null) return randomImages;
-		return randomImages.concat([
+		const avatars = (gravatarHash === null) ? randomImages : randomImages.concat([
 			`https://www.gravatar.com/avatar/${gravatarHash}`,
 		]);
-	}, [gravatarHash]);
+		if (uploadedAvatarUrl) {
+			return [...avatars, uploadedAvatarUrl]
+		};
+		return avatars;
+	}, [gravatarHash, uploadedAvatarUrl]);
 
 	const form = useForm<Profile>({
 		defaultValues: {
@@ -90,6 +114,7 @@ export const ProfileForm = () => {
 
 	useEffect(() => {
 		if (data) {
+			const currentImage = data?.user?.image || "";
 			form.reset(
 				{
 					email: data?.user?.email || "",
@@ -109,8 +134,74 @@ export const ProfileForm = () => {
 					setGravatarHash(hash);
 				});
 			}
+			if (currentImage.startsWith("/api/avatars/")) {
+				setUploadedAvatarUrl(currentImage);
+				setAvatarPreview(null);
+			} else {
+				setUploadedAvatarUrl(null);
+				setAvatarPreview(null);
+			}
 		}
 	}, [form, data]);
+
+	const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+		const file = e.target.files?.[0];
+		if (!file) return;
+
+		if (file.size > MAX_AVATAR_SIZE) {
+			toast.error("Avatar file size exceeds the maximum allowed size of 2MB");
+			if (fileInputRef.current) {
+				fileInputRef.current.value = "";
+			}
+			return;
+		}
+
+		const fileExtension = getAvatarFileExtension(file.name);
+		const isValidType =
+			ALLOWED_AVATAR_MIME_TYPES.includes(
+				file.type as (typeof ALLOWED_AVATAR_MIME_TYPES)[number],
+			) ||
+			ALLOWED_AVATAR_EXTENSIONS.includes(
+				fileExtension as (typeof ALLOWED_AVATAR_EXTENSIONS)[number],
+			);
+
+		if (!isValidType) {
+			toast.error(`Invalid file type. Only images (${ALLOWED_AVATAR_EXTENSIONS.join(', ')}) are allowed.`);
+			if (fileInputRef.current) {
+				fileInputRef.current.value = "";
+			}
+			return;
+		}
+
+		const reader = new FileReader();
+		reader.onloadend = async () => {
+			setAvatarPreview(reader.result as string);
+		};
+		reader.readAsDataURL(file);
+
+		try {
+			const formData = new FormData();
+			formData.append("avatar", file);
+			const result = await uploadAvatar(formData);
+
+			if (result.url) {
+				setUploadedAvatarUrl(result.url);
+				form.setValue("image", result.url);
+				setAvatarPreview(null);
+				toast.success("Avatar uploaded successfully");
+			}
+		} catch (error) {
+			toast.error("Failed to upload avatar. Please try again.");
+		} finally {
+			if (fileInputRef.current) {
+				fileInputRef.current.value = "";
+			}
+		}
+	};
+
+	const handleUploadAvatarClick = () => {
+		fileInputRef.current?.click();
+	};
 
 	const onSubmit = async (values: Profile) => {
 		await mutateAsync({
@@ -230,35 +321,74 @@ export const ProfileForm = () => {
 														<FormLabel>
 															{t("settings.profile.avatar")}
 														</FormLabel>
+														<FormDescription className="text-xs text-muted-foreground">
+															Upload a custom avatar image to use as your profile picture.
+															Only images ({ALLOWED_AVATAR_EXTENSIONS.join(', ')}) are allowed.
+															The maximum allowed size is {MAX_AVATAR_SIZE / 1024 / 1024}MB.
+														</FormDescription>
 														<FormControl>
-															<RadioGroup
-																onValueChange={(e) => {
-																	field.onChange(e);
-																}}
-																defaultValue={field.value}
-																value={field.value}
-																className="flex flex-row flex-wrap gap-2 max-xl:justify-center"
-															>
-																{availableAvatars.map((image) => (
-																	<FormItem key={image}>
-																		<FormLabel className="[&:has([data-state=checked])>img]:border-primary [&:has([data-state=checked])>img]:border-1 [&:has([data-state=checked])>img]:p-px cursor-pointer">
-																			<FormControl>
-																				<RadioGroupItem
-																					value={image}
-																					className="sr-only"
-																				/>
-																			</FormControl>
+															<div className="space-y-4">
+																<Input
+																	ref={fileInputRef}
+																	type="file"
+																	accept={ALLOWED_AVATAR_MIME_TYPES.join(", ")}
+																	onChange={handleFileSelect}
+																	className="hidden"
+																/>
+																<RadioGroup
+																	onValueChange={(e) => {
+																		field.onChange(e);
+																	}}
+																	defaultValue={field.value}
+																	value={field.value}
+																	className="flex flex-row flex-wrap gap-2 max-xl:justify-center"
+																>
+																	{availableAvatars.map((image) => (
+																		<FormItem key={image}>
+																			<FormLabel className="[&:has([data-state=checked])>img]:border-primary [&:has([data-state=checked])>img]:border-1 [&:has([data-state=checked])>img]:p-px cursor-pointer">
+																				<FormControl>
+																					<RadioGroupItem
+																						value={image}
+																						className="sr-only"
+																					/>
+																				</FormControl>
 
-																			<img
-																				key={image}
-																				src={image}
-																				alt="avatar"
-																				className="h-12 w-12 rounded-full border hover:p-px hover:border-primary transition-transform"
-																			/>
+																				<img
+																					key={image}
+																					src={image}
+																					alt="avatar"
+																					className="h-12 w-12 rounded-full border hover:p-px hover:border-primary transition-transform"
+																				/>
+																			</FormLabel>
+																		</FormItem>
+																	))}
+																	<FormItem>
+																		<FormLabel className="cursor-pointer">
+																			<div
+																				onClick={handleUploadAvatarClick}
+																				className="h-12 w-12 rounded-full border-2 border-dashed border-muted-foreground/50 flex items-center justify-center transition-colors relative hover:border-primary hover:bg-muted/50"
+																			>
+																				{isUploading ? (
+																					<Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+																				) : avatarPreview ? (
+																					<>
+																						<img
+																							src={avatarPreview}
+																							alt="Preview"
+																							className="h-12 w-12 rounded-full object-cover"
+																						/>
+																						<div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-full">
+																							<Upload className="h-4 w-4 text-white" />
+																						</div>
+																					</>
+																				) : (
+																					<Upload className="h-5 w-5 text-muted-foreground" />
+																				)}
+																			</div>
 																		</FormLabel>
 																	</FormItem>
-																))}
-															</RadioGroup>
+																</RadioGroup>
+															</div>
 														</FormControl>
 														<FormMessage />
 													</FormItem>

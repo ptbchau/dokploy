@@ -29,7 +29,20 @@ import {
 	createTRPCRouter,
 	protectedProcedure,
 	publicProcedure,
+	uploadProcedure,
 } from "../trpc";
+import { uploadAvatarSchema } from "@/utils/schema";
+import {
+	paths,
+	getAvatarFileExtension,
+} from "@dokploy/server/constants";
+import {
+	MAX_AVATAR_SIZE,
+	ALLOWED_AVATAR_MIME_TYPES,
+	ALLOWED_AVATAR_EXTENSIONS
+} from "@dokploy/server/constants/client";
+import { writeFile } from "node:fs/promises";
+import { join, extname } from "node:path";
 
 const apiCreateApiKey = z.object({
 	name: z.string().min(1),
@@ -175,6 +188,54 @@ export const userRouter = createTRPCRouter({
 					.where(eq(account.userId, ctx.user.id));
 			}
 			return await updateUser(ctx.user.id, input);
+		}),
+	uploadAvatar: protectedProcedure
+		.use(uploadProcedure)
+		.input(uploadAvatarSchema)
+		.mutation(async ({ input, ctx }) => {
+			const avatarFile = input.avatar;
+
+			if (avatarFile.size > MAX_AVATAR_SIZE) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Avatar file size exceeds the maximum allowed size of 2MB",
+				});
+			}
+
+			const fileExtension = getAvatarFileExtension(avatarFile.name);
+			const isValidType =
+				ALLOWED_AVATAR_MIME_TYPES.includes(
+					avatarFile.type as (typeof ALLOWED_AVATAR_MIME_TYPES)[number],
+				) ||
+				ALLOWED_AVATAR_EXTENSIONS.includes(
+					fileExtension as (typeof ALLOWED_AVATAR_EXTENSIONS)[number],
+				);
+			if (!isValidType) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid file type. Only images (jpg, jpeg, png, gif, webp) are allowed.",
+				});
+			}
+
+			const timestamp = Date.now();
+			const sanitizedExtension = fileExtension || ".png";
+			const fileName = `user-${ctx.user.id}-${timestamp}${sanitizedExtension}`;
+			const { AVATARS_PATH } = paths();
+			const filePath = join(AVATARS_PATH, fileName);
+
+			try {
+				const arrayBuffer = await avatarFile.arrayBuffer();
+				const buffer = Buffer.from(arrayBuffer);
+				await writeFile(filePath, buffer);
+				return {
+					url: `/api/avatars/${fileName}`,
+				}
+			} catch (error) {
+				throw new TRPCError({
+					code: "INTERNAL_SERVER_ERROR",
+					message: "Failed to upload avatar",
+				});
+			}
 		}),
 	getUserByToken: publicProcedure
 		.input(apiFindOneToken)

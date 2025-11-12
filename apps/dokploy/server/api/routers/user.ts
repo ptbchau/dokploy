@@ -42,7 +42,7 @@ import {
 	ALLOWED_AVATAR_EXTENSIONS
 } from "@dokploy/server/constants/client";
 import { writeFile } from "node:fs/promises";
-import { join, extname } from "node:path";
+import { join } from "node:path";
 
 const apiCreateApiKey = z.object({
 	name: z.string().min(1),
@@ -198,7 +198,7 @@ export const userRouter = createTRPCRouter({
 			if (avatarFile.size > MAX_AVATAR_SIZE) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
-					message: "Avatar file size exceeds the maximum allowed size of 2MB",
+					message: `Avatar file size exceeds the maximum allowed size of ${MAX_AVATAR_SIZE / 1024 / 1024}MB`,
 				});
 			}
 
@@ -213,7 +213,7 @@ export const userRouter = createTRPCRouter({
 			if (!isValidType) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
-					message: "Invalid file type. Only images (jpg, jpeg, png, gif, webp) are allowed.",
+					message: `Invalid file type. Only images (${ALLOWED_AVATAR_EXTENSIONS.join(', ')}) are allowed.`,
 				});
 			}
 

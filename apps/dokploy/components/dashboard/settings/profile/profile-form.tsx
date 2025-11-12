@@ -149,7 +149,7 @@ export const ProfileForm = () => {
 		if (!file) return;
 
 		if (file.size > MAX_AVATAR_SIZE) {
-			toast.error("Avatar file size exceeds the maximum allowed size of 2MB");
+			toast.error(`Avatar file size exceeds the maximum allowed size of ${MAX_AVATAR_SIZE/1024/1024}MB`);
 			if (fileInputRef.current) {
 				fileInputRef.current.value = "";
 			}

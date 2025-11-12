@@ -22,14 +22,19 @@ import { Switch } from "@/components/ui/switch";
 import { generateSHA256Hash } from "@/lib/utils";
 import { api } from "@/utils/api";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Loader2, User } from "lucide-react";
+import { Loader2, User, Upload, X } from "lucide-react";
 import { useTranslation } from "next-i18next";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
 import { Disable2FA } from "./disable-2fa";
 import { Enable2FA } from "./enable-2fa";
+import {
+	MAX_AVATAR_SIZE,
+	ALLOWED_AVATAR_MIME_TYPES,
+	ALLOWED_AVATAR_EXTENSIONS,
+} from "@dokploy/server/constants/client";
 
 const profileSchema = z.object({
 	email: z.string(),
@@ -59,6 +64,7 @@ const randomImages = [
 export const ProfileForm = () => {
 	const _utils = api.useUtils();
 	const { data, refetch, isLoading } = api.user.get.useQuery();
+	const { data: uploadedAvatarsData, refetch: refetchUploadedAvatars } = api.user.getUploadedAvatars.useQuery();
 	const { data: isCloud } = api.settings.isCloud.useQuery();
 
 	const {
@@ -67,15 +73,39 @@ export const ProfileForm = () => {
 		isError,
 		error,
 	} = api.user.update.useMutation();
+	const {
+		mutateAsync: uploadAvatar,
+		isLoading: isUploading,
+	} = api.user.uploadAvatar.useMutation();
+	const {
+		mutateAsync: deleteAvatar,
+		isLoading: isDeleting,
+	} = api.user.deleteAvatar.useMutation();
+
 	const { t } = useTranslation("settings");
 	const [gravatarHash, setGravatarHash] = useState<string | null>(null);
+	const [uploadedAvatarUrls, setUploadedAvatarUrls] = useState<string[]>([]);
+	const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+	const [deletingAvatarUrl, setDeletingAvatarUrl] = useState<string | null>(null);
+	const fileInputRef = useRef<HTMLInputElement>(null);
+
+	const getAvatarFileExtension = (fileName: string) : string => {
+		const lastDot = fileName.lastIndexOf(".");
+		if (lastDot === -1 || lastDot === fileName.length - 1) {
+			return "";
+		}
+		return fileName.substring(lastDot).toLowerCase().trim();
+	}
 
 	const availableAvatars = useMemo(() => {
-		if (gravatarHash === null) return randomImages;
-		return randomImages.concat([
+		const avatars = (gravatarHash === null) ? randomImages : randomImages.concat([
 			`https://www.gravatar.com/avatar/${gravatarHash}`,
 		]);
-	}, [gravatarHash]);
+		if (uploadedAvatarUrls && uploadedAvatarUrls.length > 0) {
+			return [...avatars, ...uploadedAvatarUrls]
+		};
+		return avatars;
+	}, [gravatarHash, uploadedAvatarUrls]);
 
 	const form = useForm<Profile>({
 		defaultValues: {
@@ -90,6 +120,7 @@ export const ProfileForm = () => {
 
 	useEffect(() => {
 		if (data) {
+			const currentImage = data?.user?.image || "";
 			form.reset(
 				{
 					email: data?.user?.email || "",
@@ -109,8 +140,150 @@ export const ProfileForm = () => {
 					setGravatarHash(hash);
 				});
 			}
+			setAvatarPreview(null);
 		}
 	}, [form, data]);
+	 
+	useEffect(() => {
+		if (uploadedAvatarsData && uploadedAvatarsData.length > 0) {
+			setUploadedAvatarUrls(uploadedAvatarsData.map((avatar) => avatar.url));
+		} else {
+			setUploadedAvatarUrls([]);
+		}
+	}, [uploadedAvatarsData]);
+
+	const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+		const file = e.target.files?.[0];
+		if (!file) return;
+
+		if (file.size > MAX_AVATAR_SIZE) {
+			toast.error(`Avatar file size exceeds the maximum allowed size of ${MAX_AVATAR_SIZE/1024/1024}MB`);
+			if (fileInputRef.current) {
+				fileInputRef.current.value = "";
+			}
+			return;
+		}
+
+		const fileExtension = getAvatarFileExtension(file.name);
+		const isValidType =
+			ALLOWED_AVATAR_MIME_TYPES.includes(
+				file.type as (typeof ALLOWED_AVATAR_MIME_TYPES)[number],
+			) ||
+			ALLOWED_AVATAR_EXTENSIONS.includes(
+				fileExtension as (typeof ALLOWED_AVATAR_EXTENSIONS)[number],
+			);
+
+		if (!isValidType) {
+			toast.error(`Invalid file type. Only images (${ALLOWED_AVATAR_EXTENSIONS.join(', ')}) are allowed.`);
+			if (fileInputRef.current) {
+				fileInputRef.current.value = "";
+			}
+			return;
+		}
+
+		const reader = new FileReader();
+		reader.onloadend = async () => {
+			setAvatarPreview(reader.result as string);
+		};
+		reader.readAsDataURL(file);
+
+		try {
+			const formData = new FormData();
+			formData.append("avatar", file);
+			const result = await uploadAvatar(formData);
+
+			if (result.url) {
+				setUploadedAvatarUrls((prev) => {
+					if (!prev.includes(result.url)) {
+						return [...prev, result.url];
+					}
+					return prev;
+				});
+				form.setValue("image", result.url);
+				setAvatarPreview(null);
+				toast.success("Avatar uploaded successfully");
+				await refetchUploadedAvatars();
+			}
+		} catch (error) {
+			toast.error("Failed to upload avatar. Please try again.");
+		} finally {
+			if (fileInputRef.current) {
+				fileInputRef.current.value = "";
+			}
+		}
+	};
+
+	const handleUploadAvatarClick = () => {
+		fileInputRef.current?.click();
+	};
+
+	const extractFileNameFromUrl = (url: string): string => {
+		// Extract filename from URL like "/api/avatars/user-123-456.png"
+		const parts = url.split("/");
+		return parts[parts.length - 1] || "";
+	};
+
+	const handleDeleteAvatar = async (avatarUrl: string) => {
+		// Only allow deletion of uploaded avatars
+		if (!avatarUrl.startsWith("/api/avatars/")) {
+			return;
+		}
+
+		const fileName = extractFileNameFromUrl(avatarUrl);
+		if (!fileName) {
+			toast.error("Invalid avatar URL");
+			return;
+		}
+
+		// Check if this is the currently selected avatar
+		const currentImage = form.getValues("image");
+		const isSelected = currentImage === avatarUrl;
+
+		// Show confirmation
+		if (!confirm("Are you sure you want to delete this avatar?")) {
+			return;
+		}
+
+		setDeletingAvatarUrl(avatarUrl);
+
+		try {
+			await deleteAvatar({ fileName });
+
+			// If this was the selected avatar, switch to first default avatar
+			if (isSelected) {
+				const firstDefaultAvatar = randomImages[0];
+				form.setValue("image", firstDefaultAvatar);
+
+				// Automatically save the profile update
+				try {
+					await mutateAsync({
+						email: form.getValues("email").toLowerCase(),
+						password: undefined,
+						image: firstDefaultAvatar,
+						currentPassword: undefined,
+						allowImpersonation: form.getValues("allowImpersonation"),
+					});
+					await refetch();
+				} catch (error) {
+					form.setValue("image", avatarUrl);
+					toast.error("Avatar deleted but profile update failed. Please save manually.");
+				}
+			}
+
+			// Remove from state
+			setUploadedAvatarUrls((prev) => prev.filter((url) => url !== avatarUrl));
+
+			// Refetch to ensure consistency
+			await refetchUploadedAvatars();
+
+			toast.success("Avatar deleted successfully");
+			await _utils.user.get.invalidate();
+		} catch (error) {
+			toast.error("Failed to delete avatar. Please try again.");
+		} finally {
+			setDeletingAvatarUrl(null);
+		}
+	};
 
 	const onSubmit = async (values: Profile) => {
 		await mutateAsync({
@@ -230,35 +403,101 @@ export const ProfileForm = () => {
 														<FormLabel>
 															{t("settings.profile.avatar")}
 														</FormLabel>
+														<FormDescription className="text-xs text-muted-foreground">
+															Upload a custom avatar image to use as your profile picture.
+															Only images ({ALLOWED_AVATAR_EXTENSIONS.join(', ')}) are allowed.
+															The maximum allowed size is {MAX_AVATAR_SIZE / 1024 / 1024}MB.
+														</FormDescription>
 														<FormControl>
-															<RadioGroup
-																onValueChange={(e) => {
-																	field.onChange(e);
-																}}
-																defaultValue={field.value}
-																value={field.value}
-																className="flex flex-row flex-wrap gap-2 max-xl:justify-center"
-															>
-																{availableAvatars.map((image) => (
-																	<FormItem key={image}>
-																		<FormLabel className="[&:has([data-state=checked])>img]:border-primary [&:has([data-state=checked])>img]:border-1 [&:has([data-state=checked])>img]:p-px cursor-pointer">
-																			<FormControl>
-																				<RadioGroupItem
-																					value={image}
-																					className="sr-only"
-																				/>
-																			</FormControl>
+															<div className="space-y-4">
+																<Input
+																	ref={fileInputRef}
+																	type="file"
+																	accept={ALLOWED_AVATAR_MIME_TYPES.join(", ")}
+																	onChange={handleFileSelect}
+																	className="hidden"
+																/>
+																<RadioGroup
+																	onValueChange={(e) => {
+																		field.onChange(e);
+																	}}
+																	defaultValue={field.value}
+																	value={field.value}
+																	className="flex flex-row flex-wrap gap-2 max-xl:justify-center"
+																>
+																	{availableAvatars.map((image) => {
+																		const isUploadedAvatar = image.startsWith("/api/avatars/");
+																		const isDeleting = deletingAvatarUrl === image;
+																		return (
+																			<FormItem key={image}>
+																				<FormLabel className="[&:has([data-state=checked])>img]:border-primary [&:has([data-state=checked])>img]:border-1 [&:has([data-state=checked])>img]:p-px cursor-pointer">
+																					<FormControl>
+																						<RadioGroupItem
+																							value={image}
+																							className="sr-only"
+																						/>
+																					</FormControl>
 
-																			<img
-																				key={image}
-																				src={image}
-																				alt="avatar"
-																				className="h-12 w-12 rounded-full border hover:p-px hover:border-primary transition-transform"
-																			/>
+																					<div className="relative group">
+																						<img
+																							key={image}
+																							src={image}
+																							alt="avatar"
+																							className={`h-12 w-12 rounded-full border hover:p-px hover:border-primary transition-transform ${
+																								isDeleting ? "opacity-50" : ""
+																							}`}
+																						/>
+																						{isUploadedAvatar && (
+																							<button
+																								type="button"
+																								onClick={(e) => {
+																									e.stopPropagation();
+																									e.preventDefault();
+																									handleDeleteAvatar(image);
+																								}}
+																								disabled={isDeleting}
+																								className="absolute -top-1 -right-1 h-5 w-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-destructive/90 disabled:opacity-50 disabled:cursor-not-allowed"
+																								title="Delete avatar"
+																							>
+																								{isDeleting ? (
+																									<Loader2 className="h-3 w-3 animate-spin" />
+																								) : (
+																									<X className="h-3 w-3" />
+																								)}
+																							</button>
+																						)}
+																					</div>
+																				</FormLabel>
+																			</FormItem>
+																		);
+																	})}
+																	<FormItem>
+																		<FormLabel className="cursor-pointer">
+																			<div
+																				onClick={handleUploadAvatarClick}
+																				className="h-12 w-12 rounded-full border-2 border-dashed border-muted-foreground/50 flex items-center justify-center transition-colors relative hover:border-primary hover:bg-muted/50"
+																			>
+																				{isUploading ? (
+																					<Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+																				) : avatarPreview ? (
+																					<>
+																						<img
+																							src={avatarPreview}
+																							alt="Preview"
+																							className="h-12 w-12 rounded-full object-cover"
+																						/>
+																						<div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-full">
+																							<Upload className="h-4 w-4 text-white" />
+																						</div>
+																					</>
+																				) : (
+																					<Upload className="h-5 w-5 text-muted-foreground" />
+																				)}
+																			</div>
 																		</FormLabel>
 																	</FormItem>
-																))}
-															</RadioGroup>
+																</RadioGroup>
+															</div>
 														</FormControl>
 														<FormMessage />
 													</FormItem>

@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { paths } from "../constants";
+import { update } from "lodash";
 
 const createDirectoryIfNotExist = (dirPath: string) => {
 	if (!existsSync(dirPath)) {
@@ -19,6 +20,8 @@ export const setupDirectories = () => {
 		MONITORING_PATH,
 		SSH_PATH,
 		SCHEDULES_PATH,
+		UPLOADS_PATH,
+		AVATARS_PATH,
 	} = paths();
 	const directories = [
 		BASE_PATH,
@@ -30,6 +33,8 @@ export const setupDirectories = () => {
 		CERTIFICATES_PATH,
 		MONITORING_PATH,
 		SCHEDULES_PATH,
+		UPLOADS_PATH,
+		AVATARS_PATH,
 	];
 
 	for (const dir of directories) {

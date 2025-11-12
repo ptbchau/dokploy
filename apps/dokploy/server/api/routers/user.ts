@@ -29,7 +29,23 @@ import {
 	createTRPCRouter,
 	protectedProcedure,
 	publicProcedure,
+	uploadProcedure,
 } from "../trpc";
+import { uploadAvatarSchema } from "@/utils/schema";
+import {
+	paths,
+	getAvatarFileExtension,
+	isValidAvatarFilename,
+	validatePathWithinBase,
+} from "@dokploy/server/constants";
+import {
+	MAX_AVATAR_SIZE,
+	ALLOWED_AVATAR_MIME_TYPES,
+	ALLOWED_AVATAR_EXTENSIONS
+} from "@dokploy/server/constants/client";
+import { readdir, writeFile, unlink } from "node:fs/promises";
+import { join } from "node:path";
+import { existsSync } from "node:fs";
 
 const apiCreateApiKey = z.object({
 	name: z.string().min(1),
@@ -176,6 +192,152 @@ export const userRouter = createTRPCRouter({
 			}
 			return await updateUser(ctx.user.id, input);
 		}),
+	uploadAvatar: protectedProcedure
+		.use(uploadProcedure)
+		.input(uploadAvatarSchema)
+		.mutation(async ({ input, ctx }) => {
+			const avatarFile = input.avatar;
+
+			if (avatarFile.size > MAX_AVATAR_SIZE) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: `Avatar file size exceeds the maximum allowed size of ${MAX_AVATAR_SIZE / 1024 / 1024}MB`,
+				});
+			}
+
+			const fileExtension = getAvatarFileExtension(avatarFile.name);
+			const isValidType =
+				ALLOWED_AVATAR_MIME_TYPES.includes(
+					avatarFile.type as (typeof ALLOWED_AVATAR_MIME_TYPES)[number],
+				) ||
+				ALLOWED_AVATAR_EXTENSIONS.includes(
+					fileExtension as (typeof ALLOWED_AVATAR_EXTENSIONS)[number],
+				);
+			if (!isValidType) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: `Invalid file type. Only images (${ALLOWED_AVATAR_EXTENSIONS.join(', ')}) are allowed.`,
+				});
+			}
+
+			const timestamp = Date.now();
+			const sanitizedExtension = fileExtension || ".png";
+			const fileName = `user-${ctx.user.id}-${timestamp}${sanitizedExtension}`;
+			const { AVATARS_PATH } = paths();
+			const filePath = join(AVATARS_PATH, fileName);
+
+			try {
+				const arrayBuffer = await avatarFile.arrayBuffer();
+				const buffer = Buffer.from(arrayBuffer);
+				await writeFile(filePath, buffer);
+				return {
+					url: `/api/avatars/${fileName}`,
+				}
+			} catch (error) {
+				throw new TRPCError({
+					code: "INTERNAL_SERVER_ERROR",
+					message: "Failed to upload avatar",
+				});
+			}
+		}),
+	getUploadedAvatars: protectedProcedure.query(async ({ ctx }) => {
+		const { AVATARS_PATH } = paths();
+		if (!existsSync(AVATARS_PATH)) {
+			return [];
+		}
+		try {
+			const files = await readdir(AVATARS_PATH);
+			const userAvatarsPrefix = `user-${ctx.user.id}-`;
+			const userUploadedAvatars = files
+				.filter((file : string) => file.startsWith(userAvatarsPrefix))
+				.map((file : string) => ({
+					url: `/api/avatars/${file}`,
+					fileName: file,
+				}))
+				.sort()
+				.reverse();
+			return userUploadedAvatars;
+		} catch (error) {
+			return [];
+		}
+	}),
+	deleteAvatar: protectedProcedure
+		.input(
+			z.object({
+				fileName: z.string(),
+			}),
+		)
+		.mutation(async ({ input, ctx }) => {
+			const { fileName } = input;
+			const { AVATARS_PATH } = paths();
+
+			// Validate filename format
+			if (!isValidAvatarFilename(fileName)) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid filename format",
+				});
+			}
+
+			// Verify ownership - file must start with user-{userId}-
+			const userAvatarPrefix = `user-${ctx.user.id}-`;
+			if (!fileName.startsWith(userAvatarPrefix)) {
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "You are not authorized to delete this avatar",
+				});
+			}
+
+			// Validate path security to prevent directory traversal
+			const safePath = validatePathWithinBase(AVATARS_PATH, fileName);
+			if (!safePath) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid file path",
+				});
+			}
+
+			// Check if file exists
+			if (!existsSync(safePath)) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Avatar file not found",
+				});
+			}
+
+			try {
+				// Delete the file
+				await unlink(safePath);
+				return { success: true };
+			} catch (error) {
+				console.error("Error deleting avatar:", error);
+				throw new TRPCError({
+					code: "INTERNAL_SERVER_ERROR",
+					message: "Failed to delete avatar",
+				});
+			}
+		}),
+	getUserAvatars: protectedProcedure.query(async ({ ctx }) => {
+		const { AVATARS_PATH } = paths();
+		const userId = ctx.user.id;
+		const prefix = `user-${userId}-`;
+
+		try {
+			const files = await readdir(AVATARS_PATH);
+			const userAvatars = files
+			.filter((file : string) => file.startsWith(prefix))
+			.map((file : string) => ({
+				url: `/api/avatars/${file}`,
+				fileName: file,
+			}))
+			.sort()
+			.reverse();
+
+			return userAvatars;
+		} catch (error) {
+			return []
+		}
+	}),
 	getUserByToken: publicProcedure
 		.input(apiFindOneToken)
 		.query(async ({ input }) => {

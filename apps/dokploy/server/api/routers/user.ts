@@ -35,13 +35,15 @@ import { uploadAvatarSchema } from "@/utils/schema";
 import {
 	paths,
 	getAvatarFileExtension,
+	isValidAvatarFilename,
+	validatePathWithinBase,
 } from "@dokploy/server/constants";
 import {
 	MAX_AVATAR_SIZE,
 	ALLOWED_AVATAR_MIME_TYPES,
 	ALLOWED_AVATAR_EXTENSIONS
 } from "@dokploy/server/constants/client";
-import { readdir, writeFile } from "node:fs/promises";
+import { readdir, writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 
@@ -259,6 +261,62 @@ export const userRouter = createTRPCRouter({
 			return [];
 		}
 	}),
+	deleteAvatar: protectedProcedure
+		.input(
+			z.object({
+				fileName: z.string(),
+			}),
+		)
+		.mutation(async ({ input, ctx }) => {
+			const { fileName } = input;
+			const { AVATARS_PATH } = paths();
+
+			// Validate filename format
+			if (!isValidAvatarFilename(fileName)) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid filename format",
+				});
+			}
+
+			// Verify ownership - file must start with user-{userId}-
+			const userAvatarPrefix = `user-${ctx.user.id}-`;
+			if (!fileName.startsWith(userAvatarPrefix)) {
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "You are not authorized to delete this avatar",
+				});
+			}
+
+			// Validate path security to prevent directory traversal
+			const safePath = validatePathWithinBase(AVATARS_PATH, fileName);
+			if (!safePath) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Invalid file path",
+				});
+			}
+
+			// Check if file exists
+			if (!existsSync(safePath)) {
+				throw new TRPCError({
+					code: "NOT_FOUND",
+					message: "Avatar file not found",
+				});
+			}
+
+			try {
+				// Delete the file
+				await unlink(safePath);
+				return { success: true };
+			} catch (error) {
+				console.error("Error deleting avatar:", error);
+				throw new TRPCError({
+					code: "INTERNAL_SERVER_ERROR",
+					message: "Failed to delete avatar",
+				});
+			}
+		}),
 	getUserAvatars: protectedProcedure.query(async ({ ctx }) => {
 		const { AVATARS_PATH } = paths();
 		const userId = ctx.user.id;

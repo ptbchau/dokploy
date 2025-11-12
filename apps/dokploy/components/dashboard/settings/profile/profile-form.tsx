@@ -22,7 +22,7 @@ import { Switch } from "@/components/ui/switch";
 import { generateSHA256Hash } from "@/lib/utils";
 import { api } from "@/utils/api";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Loader2, User, Upload } from "lucide-react";
+import { Loader2, User, Upload, X } from "lucide-react";
 import { useTranslation } from "next-i18next";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useForm } from "react-hook-form";
@@ -77,11 +77,16 @@ export const ProfileForm = () => {
 		mutateAsync: uploadAvatar,
 		isLoading: isUploading,
 	} = api.user.uploadAvatar.useMutation();
+	const {
+		mutateAsync: deleteAvatar,
+		isLoading: isDeleting,
+	} = api.user.deleteAvatar.useMutation();
 
 	const { t } = useTranslation("settings");
 	const [gravatarHash, setGravatarHash] = useState<string | null>(null);
 	const [uploadedAvatarUrls, setUploadedAvatarUrls] = useState<string[]>([]);
 	const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+	const [deletingAvatarUrl, setDeletingAvatarUrl] = useState<string | null>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 
 	const getAvatarFileExtension = (fileName: string) : string => {
@@ -210,6 +215,74 @@ export const ProfileForm = () => {
 
 	const handleUploadAvatarClick = () => {
 		fileInputRef.current?.click();
+	};
+
+	const extractFileNameFromUrl = (url: string): string => {
+		// Extract filename from URL like "/api/avatars/user-123-456.png"
+		const parts = url.split("/");
+		return parts[parts.length - 1] || "";
+	};
+
+	const handleDeleteAvatar = async (avatarUrl: string) => {
+		// Only allow deletion of uploaded avatars
+		if (!avatarUrl.startsWith("/api/avatars/")) {
+			return;
+		}
+
+		const fileName = extractFileNameFromUrl(avatarUrl);
+		if (!fileName) {
+			toast.error("Invalid avatar URL");
+			return;
+		}
+
+		// Check if this is the currently selected avatar
+		const currentImage = form.getValues("image");
+		const isSelected = currentImage === avatarUrl;
+
+		// Show confirmation
+		if (!confirm("Are you sure you want to delete this avatar?")) {
+			return;
+		}
+
+		setDeletingAvatarUrl(avatarUrl);
+
+		try {
+			await deleteAvatar({ fileName });
+
+			// If this was the selected avatar, switch to first default avatar
+			if (isSelected) {
+				const firstDefaultAvatar = randomImages[0];
+				form.setValue("image", firstDefaultAvatar);
+
+				// Automatically save the profile update
+				try {
+					await mutateAsync({
+						email: form.getValues("email").toLowerCase(),
+						password: undefined,
+						image: firstDefaultAvatar,
+						currentPassword: undefined,
+						allowImpersonation: form.getValues("allowImpersonation"),
+					});
+					await refetch();
+				} catch (error) {
+					form.setValue("image", avatarUrl);
+					toast.error("Avatar deleted but profile update failed. Please save manually.");
+				}
+			}
+
+			// Remove from state
+			setUploadedAvatarUrls((prev) => prev.filter((url) => url !== avatarUrl));
+
+			// Refetch to ensure consistency
+			await refetchUploadedAvatars();
+
+			toast.success("Avatar deleted successfully");
+			await _utils.user.get.invalidate();
+		} catch (error) {
+			toast.error("Failed to delete avatar. Please try again.");
+		} finally {
+			setDeletingAvatarUrl(null);
+		}
 	};
 
 	const onSubmit = async (values: Profile) => {
@@ -352,25 +425,52 @@ export const ProfileForm = () => {
 																	value={field.value}
 																	className="flex flex-row flex-wrap gap-2 max-xl:justify-center"
 																>
-																	{availableAvatars.map((image) => (
-																		<FormItem key={image}>
-																			<FormLabel className="[&:has([data-state=checked])>img]:border-primary [&:has([data-state=checked])>img]:border-1 [&:has([data-state=checked])>img]:p-px cursor-pointer">
-																				<FormControl>
-																					<RadioGroupItem
-																						value={image}
-																						className="sr-only"
-																					/>
-																				</FormControl>
+																	{availableAvatars.map((image) => {
+																		const isUploadedAvatar = image.startsWith("/api/avatars/");
+																		const isDeleting = deletingAvatarUrl === image;
+																		return (
+																			<FormItem key={image}>
+																				<FormLabel className="[&:has([data-state=checked])>img]:border-primary [&:has([data-state=checked])>img]:border-1 [&:has([data-state=checked])>img]:p-px cursor-pointer">
+																					<FormControl>
+																						<RadioGroupItem
+																							value={image}
+																							className="sr-only"
+																						/>
+																					</FormControl>
 
-																				<img
-																					key={image}
-																					src={image}
-																					alt="avatar"
-																					className="h-12 w-12 rounded-full border hover:p-px hover:border-primary transition-transform"
-																				/>
-																			</FormLabel>
-																		</FormItem>
-																	))}
+																					<div className="relative group">
+																						<img
+																							key={image}
+																							src={image}
+																							alt="avatar"
+																							className={`h-12 w-12 rounded-full border hover:p-px hover:border-primary transition-transform ${
+																								isDeleting ? "opacity-50" : ""
+																							}`}
+																						/>
+																						{isUploadedAvatar && (
+																							<button
+																								type="button"
+																								onClick={(e) => {
+																									e.stopPropagation();
+																									e.preventDefault();
+																									handleDeleteAvatar(image);
+																								}}
+																								disabled={isDeleting}
+																								className="absolute -top-1 -right-1 h-5 w-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-destructive/90 disabled:opacity-50 disabled:cursor-not-allowed"
+																								title="Delete avatar"
+																							>
+																								{isDeleting ? (
+																									<Loader2 className="h-3 w-3 animate-spin" />
+																								) : (
+																									<X className="h-3 w-3" />
+																								)}
+																							</button>
+																						)}
+																					</div>
+																				</FormLabel>
+																			</FormItem>
+																		);
+																	})}
 																	<FormItem>
 																		<FormLabel className="cursor-pointer">
 																			<div

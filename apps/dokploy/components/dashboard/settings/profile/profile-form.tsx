@@ -64,6 +64,7 @@ const randomImages = [
 export const ProfileForm = () => {
 	const _utils = api.useUtils();
 	const { data, refetch, isLoading } = api.user.get.useQuery();
+	const { data: uploadedAvatarsData, refetch: refetchUploadedAvatars } = api.user.getUploadedAvatars.useQuery();
 	const { data: isCloud } = api.settings.isCloud.useQuery();
 
 	const {
@@ -79,7 +80,7 @@ export const ProfileForm = () => {
 
 	const { t } = useTranslation("settings");
 	const [gravatarHash, setGravatarHash] = useState<string | null>(null);
-	const [uploadedAvatarUrl, setUploadedAvatarUrl] = useState<string | null>(null);
+	const [uploadedAvatarUrls, setUploadedAvatarUrls] = useState<string[]>([]);
 	const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -95,11 +96,11 @@ export const ProfileForm = () => {
 		const avatars = (gravatarHash === null) ? randomImages : randomImages.concat([
 			`https://www.gravatar.com/avatar/${gravatarHash}`,
 		]);
-		if (uploadedAvatarUrl) {
-			return [...avatars, uploadedAvatarUrl]
+		if (uploadedAvatarUrls && uploadedAvatarUrls.length > 0) {
+			return [...avatars, ...uploadedAvatarUrls]
 		};
 		return avatars;
-	}, [gravatarHash, uploadedAvatarUrl]);
+	}, [gravatarHash, uploadedAvatarUrls]);
 
 	const form = useForm<Profile>({
 		defaultValues: {
@@ -134,15 +135,17 @@ export const ProfileForm = () => {
 					setGravatarHash(hash);
 				});
 			}
-			if (currentImage.startsWith("/api/avatars/")) {
-				setUploadedAvatarUrl(currentImage);
-				setAvatarPreview(null);
-			} else {
-				setUploadedAvatarUrl(null);
-				setAvatarPreview(null);
-			}
+			setAvatarPreview(null);
 		}
 	}, [form, data]);
+	 
+	useEffect(() => {
+		if (uploadedAvatarsData && uploadedAvatarsData.length > 0) {
+			setUploadedAvatarUrls(uploadedAvatarsData.map((avatar) => avatar.url));
+		} else {
+			setUploadedAvatarUrls([]);
+		}
+	}, [uploadedAvatarsData]);
 
 	const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
 		const file = e.target.files?.[0];
@@ -185,10 +188,16 @@ export const ProfileForm = () => {
 			const result = await uploadAvatar(formData);
 
 			if (result.url) {
-				setUploadedAvatarUrl(result.url);
+				setUploadedAvatarUrls((prev) => {
+					if (!prev.includes(result.url)) {
+						return [...prev, result.url];
+					}
+					return prev;
+				});
 				form.setValue("image", result.url);
 				setAvatarPreview(null);
 				toast.success("Avatar uploaded successfully");
+				await refetchUploadedAvatars();
 			}
 		} catch (error) {
 			toast.error("Failed to upload avatar. Please try again.");

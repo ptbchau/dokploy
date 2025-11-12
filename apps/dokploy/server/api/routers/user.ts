@@ -41,8 +41,9 @@ import {
 	ALLOWED_AVATAR_MIME_TYPES,
 	ALLOWED_AVATAR_EXTENSIONS
 } from "@dokploy/server/constants/client";
-import { writeFile } from "node:fs/promises";
+import { readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { existsSync } from "node:fs";
 
 const apiCreateApiKey = z.object({
 	name: z.string().min(1),
@@ -237,6 +238,48 @@ export const userRouter = createTRPCRouter({
 				});
 			}
 		}),
+	getUploadedAvatars: protectedProcedure.query(async ({ ctx }) => {
+		const { AVATARS_PATH } = paths();
+		if (!existsSync(AVATARS_PATH)) {
+			return [];
+		}
+		try {
+			const files = await readdir(AVATARS_PATH);
+			const userAvatarsPrefix = `user-${ctx.user.id}-`;
+			const userUploadedAvatars = files
+				.filter((file : string) => file.startsWith(userAvatarsPrefix))
+				.map((file : string) => ({
+					url: `/api/avatars/${file}`,
+					fileName: file,
+				}))
+				.sort()
+				.reverse();
+			return userUploadedAvatars;
+		} catch (error) {
+			return [];
+		}
+	}),
+	getUserAvatars: protectedProcedure.query(async ({ ctx }) => {
+		const { AVATARS_PATH } = paths();
+		const userId = ctx.user.id;
+		const prefix = `user-${userId}-`;
+
+		try {
+			const files = await readdir(AVATARS_PATH);
+			const userAvatars = files
+			.filter((file : string) => file.startsWith(prefix))
+			.map((file : string) => ({
+				url: `/api/avatars/${file}`,
+				fileName: file,
+			}))
+			.sort()
+			.reverse();
+
+			return userAvatars;
+		} catch (error) {
+			return []
+		}
+	}),
 	getUserByToken: publicProcedure
 		.input(apiFindOneToken)
 		.query(async ({ input }) => {
